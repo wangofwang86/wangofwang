@@ -27,7 +27,7 @@ with st.sidebar:
 api_key = st.secrets["DEEPSEEK_KEY"]
 # --- 3. 初始化 AI 客户端 ---
 # 这里建议加上判断，防止没填 Key 就运行
-client = OpenAI(api_key="DEEPSEEK_KEY" ,base_url="https://api.deepseek.com")
+client = OpenAI(api_key=api_key ,base_url="https://api.deepseek.com")
 
 # --- 4. 记忆恢复（关联之前的 messages） ---
 if "messages" not in st.session_state:
@@ -68,4 +68,5 @@ if prompt := st.chat_input("说点什么吧..."):
         
         response_placeholder.markdown(full_response) # 完成后去掉光标
     
+
     st.session_state.messages.append({"role": "assistant", "content": full_response})
