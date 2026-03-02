@@ -1,72 +1,113 @@
+
+
 import streamlit as st
 from openai import OpenAI
-import json
-import os
-temp=0.7
-# --- 1. 页面设置 ---
-st.set_page_config(page_title="DeepSeek 智聊", page_icon="🚀", layout="wide")
+import PyPDF2  # 用于解析 PDF 的核心库
 
-# --- 2. 侧边栏：参数调节与存档管理 ---
-with st.sidebar:
-    st.title("🤖 助手设置")
-    st.info("在这里可以管理你的对话")
-    st.title("⚙️ 配置")
-    # 这里定义的 temp 只在侧边栏逻辑里生效
-    temp = st.slider("创造力", 0.0, 2.0, 0.7)
-    # 添加一个明显的按钮
-    if st.button("🧹 清空当前对话", use_container_width=True):
-        # 核心逻辑：重置 session_state 里的消息列表
-        st.session_state.messages = [
-            {"role": "system", "content": "你是一个友善的网页助手。"}
-        ]
-        # 强制刷新页面，让气泡消失
-        st.rerun()
+# --- 1. 初始化页面配置 ---
+st.set_page_config(page_title="AI 创业实战助手", layout="wide")
 
-    st.divider() # 画一条分割线
-    st.write("当前记忆长度：", len(st.session_state.get("messages", [])))
-api_key = st.secrets["DEEPSEEK_KEY"]
+#api_key = st.secrets["DEEPSEEK_KEY"]
 # --- 3. 初始化 AI 客户端 ---
 # 这里建议加上判断，防止没填 Key 就运行
-client = OpenAI(api_key=api_key ,base_url="https://api.deepseek.com")
+client = OpenAI(api_key=st.secrets["DEEPSEEK_KEY"] ,base_url="https://api.deepseek.com")
+# --- 2. 初始化 DeepSeek 客户端 ---
+# 这里使用了 Streamlit 的 Secrets 功能来保护你的 API Key
 
-# --- 4. 记忆恢复（关联之前的 messages） ---
+# --- 3. 定义 PDF 处理逻辑 (底层逻辑：数据清洗) ---
+def read_pdf(file):
+    """从 PDF 文件中提取纯文本内容"""
+    pdf_reader = PyPDF2.PdfReader(file)
+    text = ""
+    for page in pdf_reader.pages:
+        # 逐页提取文字并拼接
+        content = page.extract_text()
+        if content:
+            text += content + "\n"
+    return text
+
+# --- 4. 初始化聊天记录 (底层逻辑：状态管理) ---
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "system", "content": "你是一个助手"}]
+    st.session_state.messages = []
 
-# --- 5. 渲染聊天气泡 ---
+# --- 5. 侧边栏布局 (用户交互设计) ---
+with st.sidebar:
+    st.title("⚙️ 控制面板")
+    
+    # 文件上传组件
+    uploaded_file = st.file_uploader("📂 上传参考文档 (PDF/TXT)", type=['pdf', 'txt'])
+    
+    file_content = ""
+    if uploaded_file:
+        if uploaded_file.name.endswith(".pdf"):
+            file_content = read_pdf(uploaded_file)
+        else:
+            file_content = uploaded_file.read().decode("utf-8")
+        st.success("✅ 文档加载成功！")
+        
+        # 预览功能：增强用户对数据的感知
+        with st.expander("查看提取的内容预览"):
+            st.text(file_content[:1000] + "...")
+
+    # 清空按钮
+    if st.button("🧹 清空对话历史"):
+        st.session_state.messages = []
+        st.rerun()
+
+# --- 6. 聊天界面展示 ---
+st.title("🤖 你的 AI 文档顾问")
+st.caption("上传一份 PDF，我会基于文档内容回答你的问题。")
+
+# 渲染历史消息
 for message in st.session_state.messages:
-    if message["role"] != "system":
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-# --- 6. 聊天逻辑：引入【流式输出】 ---
-if prompt := st.chat_input("说点什么吧..."):
-    # 用户输入
-    st.session_state.messages.append({"role": "user", "content": prompt})
+# --- 7. 对话核心逻辑 (底层逻辑：Prompt 工程) ---
+if prompt := st.chat_input("请问我关于文档的任何问题..."):
+    
+    # 展示用户输入
     with st.chat_message("user"):
         st.markdown(prompt)
+    
+    # 构造发送给 AI 的消息列表
+    # 创业技巧：使用 System Prompt 进行“任务锚定”
+    messages_to_send = []
+    
+    # 如果有上传文件，则将文件内容作为“上下文”注入
+    if file_content:
+        messages_to_send.append({
+            "role": "system", 
+            "content": f"你是一个专业的文档分析专家。以下是用户上传的文档内容：\n\n{file_content}\n\n请严格基于上述内容回答。如果内容中没有相关信息，请诚实说明。"
+        })
+    else:
+        messages_to_send.append({
+            "role": "system", 
+            "content": "你是一个有用的 AI 助手。"
+        })
 
-    # AI 回复（打字机效果）
+    # 合并历史对话记录
+    messages_to_send.extend(st.session_state.messages)
+    messages_to_send.append({"role": "user", "content": prompt})
+
+    # 调用 API 并流式输出
     with st.chat_message("assistant"):
-        # 创建一个空容器用来放文字
         response_placeholder = st.empty()
         full_response = ""
         
-        # 开启 stream=True
-        response = client.chat.completions.create(
+        stream = client.chat.completions.create(
             model="deepseek-chat",
-            messages=st.session_state.messages,
-            temperature=temp,
-            stream=True  # 开启流式传输
+            messages=messages_to_send,
+            stream=True
         )
         
-        # 逐个字符蹦出来
-        for chunk in response:
+        for chunk in stream:
             if chunk.choices[0].delta.content is not None:
                 full_response += chunk.choices[0].delta.content
-                response_placeholder.markdown(full_response + "▌") # 加个光标
+                response_placeholder.markdown(full_response + "▌")
         
-        response_placeholder.markdown(full_response) # 完成后去掉光标
-    
+        response_placeholder.markdown(full_response)
 
+    # 将本次对话存入记忆
+    st.session_state.messages.append({"role": "user", "content": prompt})
     st.session_state.messages.append({"role": "assistant", "content": full_response})
